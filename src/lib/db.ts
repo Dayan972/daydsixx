@@ -4,13 +4,13 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { LegalInfo } from "./legal";
 import type { Section, Theme } from "./store-types";
-import { DEFAULT_THEME } from "./store-types";
+import { DEFAULT_THEME, normalizeTheme } from "./store-types";
 
 /**
  * Couche de données du prototype : SQLite intégré à Node (aucune dépendance).
  * Toutes les fonctions sont synchrones et testables hors de Next.js.
- * Dans les composants serveur, passez par `src/lib/data.ts` qui appelle
- * `connection()` pour que les lectures aient lieu à la requête et non au build.
+ * Dans les composants serveur, appelez `await connection()` avant de lire, pour
+ * que les lectures aient lieu à la requête et non au moment du build.
  */
 
 const SCHEMA = `
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS products (
   description TEXT NOT NULL DEFAULT '',
   price_cents INTEGER NOT NULL CHECK (price_cents >= 0),
   compare_at_cents INTEGER,
-  image_url TEXT,
+  images_json TEXT NOT NULL DEFAULT '[]',
   tags TEXT NOT NULL DEFAULT '',
   seo_title TEXT NOT NULL DEFAULT '',
   seo_description TEXT NOT NULL DEFAULT '',
@@ -90,8 +90,29 @@ CREATE TABLE IF NOT EXISTS chat_log (
   role TEXT NOT NULL CHECK (role IN ('user','assistant')),
   text TEXT NOT NULL,
   actions_json TEXT NOT NULL DEFAULT '[]',
+  attachments_json TEXT NOT NULL DEFAULT '[]',
   credits_spent INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+-- Médiathèque : photos envoyées par le marchand ou images générées.
+CREATE TABLE IF NOT EXISTS media (
+  id TEXT PRIMARY KEY,
+  store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('upload','generated')),
+  mime TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  alt TEXT NOT NULL DEFAULT '',
+  width INTEGER,
+  height INTEGER,
+  bytes INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+-- Inscriptions à la newsletter d'une boutique (consentement explicite, date conservée).
+CREATE TABLE IF NOT EXISTS newsletter (
+  store_id TEXT NOT NULL REFERENCES stores(id) ON DELETE CASCADE,
+  email TEXT NOT NULL,
+  consented_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (store_id, email)
 );
 -- Mesure d'audience sans cookie ni adresse IP : un compteur par page et par jour.
 CREATE TABLE IF NOT EXISTS pageviews (
@@ -110,7 +131,27 @@ function openDb(file: string): DatabaseSync {
   const db = new DatabaseSync(file);
   db.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;");
   db.exec(SCHEMA);
+  migrate(db);
   return db;
+}
+
+/** Mises à niveau des bases créées par une version précédente du prototype. */
+function migrate(db: DatabaseSync): void {
+  const productCols = (db.prepare("PRAGMA table_info(products)").all() as Row[]).map((c) => c.name);
+  if (!productCols.includes("images_json")) {
+    db.exec("ALTER TABLE products ADD COLUMN images_json TEXT NOT NULL DEFAULT '[]'");
+  }
+  const chatCols = (db.prepare("PRAGMA table_info(chat_log)").all() as Row[]).map((c) => c.name);
+  if (!chatCols.includes("attachments_json")) {
+    db.exec("ALTER TABLE chat_log ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'");
+  }
+}
+
+/** Dossier des fichiers de la médiathèque (à remplacer par un stockage objet en production). */
+export function mediaDir(): string {
+  const dir = process.env.MEDIA_DIR ?? path.join(process.cwd(), "data", "media");
+  mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
 export function getDb(): DatabaseSync {
@@ -172,7 +213,8 @@ export interface Product {
   description: string;
   priceCents: number;
   compareAtCents: number | null;
-  imageUrl: string | null;
+  /** Références d'images (media:<id> ou URL https), la première sert de visuel principal. */
+  images: string[];
   tags: string[];
   seoTitle: string;
   seoDescription: string;
@@ -219,6 +261,8 @@ export interface ChatLogEntry {
   role: "user" | "assistant";
   text: string;
   actions: ChatAction[];
+  /** Photos jointes au message (media:<id>). */
+  attachments: string[];
   creditsSpent: number;
   createdAt: string;
 }
@@ -243,7 +287,7 @@ function toStore(r: Row): Store {
     name: r.name as string,
     tagline: r.tagline as string,
     description: r.description as string,
-    theme: { ...DEFAULT_THEME, ...JSON.parse(r.theme_json as string) },
+    theme: normalizeTheme(JSON.parse(r.theme_json as string)),
     sections: JSON.parse(r.sections_json as string),
     legal: JSON.parse(r.legal_json as string),
     authenticResellerDeclared: r.authentic_reseller_declared === 1,
@@ -265,7 +309,7 @@ function toProduct(r: Row): Product {
     description: r.description as string,
     priceCents: Number(r.price_cents),
     compareAtCents: r.compare_at_cents == null ? null : Number(r.compare_at_cents),
-    imageUrl: (r.image_url as string | null) ?? null,
+    images: JSON.parse((r.images_json as string | undefined) ?? "[]"),
     tags: (r.tags as string).split(",").map((t) => t.trim()).filter(Boolean),
     seoTitle: r.seo_title as string,
     seoDescription: r.seo_description as string,
@@ -401,7 +445,7 @@ export interface ProductInput {
   description: string;
   priceCents: number;
   compareAtCents?: number | null;
-  imageUrl?: string | null;
+  images?: string[];
   tags?: string[];
   seoTitle?: string;
   seoDescription?: string;
@@ -413,7 +457,7 @@ export function createProduct(storeId: string, input: ProductInput): Product {
   getDb()
     .prepare(
       `INSERT INTO products (id, store_id, handle, title, description, price_cents, compare_at_cents,
-         image_url, tags, seo_title, seo_description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         images_json, tags, seo_title, seo_description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       randomUUID(),
@@ -423,7 +467,7 @@ export function createProduct(storeId: string, input: ProductInput): Product {
       input.description,
       input.priceCents,
       input.compareAtCents ?? null,
-      input.imageUrl ?? null,
+      JSON.stringify(input.images ?? []),
       (input.tags ?? []).join(","),
       input.seoTitle ?? input.title,
       input.seoDescription ?? input.description.slice(0, 155),
@@ -441,14 +485,14 @@ export function updateProduct(
   getDb()
     .prepare(
       `UPDATE products SET title = ?, description = ?, price_cents = ?, compare_at_cents = ?,
-         image_url = ?, tags = ?, seo_title = ?, seo_description = ? WHERE id = ?`,
+         images_json = ?, tags = ?, seo_title = ?, seo_description = ? WHERE id = ?`,
     )
     .run(
       patch.title ?? p.title,
       patch.description ?? p.description,
       patch.priceCents ?? p.priceCents,
       patch.compareAtCents === undefined ? p.compareAtCents : patch.compareAtCents,
-      patch.imageUrl === undefined ? p.imageUrl : patch.imageUrl,
+      JSON.stringify(patch.images ?? p.images),
       (patch.tags ?? p.tags).join(","),
       patch.seoTitle ?? p.seoTitle,
       patch.seoDescription ?? p.seoDescription,
@@ -610,11 +654,11 @@ export function saveConversationMessages(conversationId: string, apiMessages: un
 
 export function addChatLog(
   conversationId: string,
-  entry: Omit<ChatLogEntry, "id" | "createdAt">,
+  entry: Omit<ChatLogEntry, "id" | "createdAt" | "attachments"> & { attachments?: string[] },
 ): void {
   getDb()
     .prepare(
-      "INSERT INTO chat_log (id, conversation_id, role, text, actions_json, credits_spent) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO chat_log (id, conversation_id, role, text, actions_json, attachments_json, credits_spent) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .run(
       randomUUID(),
@@ -622,6 +666,7 @@ export function addChatLog(
       entry.role,
       entry.text,
       JSON.stringify(entry.actions),
+      JSON.stringify(entry.attachments ?? []),
       entry.creditsSpent,
     );
 }
@@ -636,6 +681,7 @@ export function listChatLog(conversationId: string): ChatLogEntry[] {
     role: r.role as "user" | "assistant",
     text: r.text as string,
     actions: JSON.parse(r.actions_json as string),
+    attachments: JSON.parse((r.attachments_json as string | undefined) ?? "[]"),
     creditsSpent: Number(r.credits_spent),
     createdAt: r.created_at as string,
   }));
@@ -659,4 +705,78 @@ export function pageviewsLastDays(storeId: string, days = 7): number {
     .prepare("SELECT COALESCE(SUM(count), 0) AS n FROM pageviews WHERE store_id = ? AND day >= ?")
     .get(storeId, since) as Row;
   return Number(r.n);
+}
+
+// ---------------------------------------------------------------- Médiathèque
+
+export interface Media {
+  id: string;
+  storeId: string;
+  kind: "upload" | "generated";
+  mime: string;
+  fileName: string;
+  alt: string;
+  width: number | null;
+  height: number | null;
+  bytes: number;
+  createdAt: string;
+}
+
+function toMedia(r: Row): Media {
+  return {
+    id: r.id as string,
+    storeId: r.store_id as string,
+    kind: r.kind as Media["kind"],
+    mime: r.mime as string,
+    fileName: r.file_name as string,
+    alt: r.alt as string,
+    width: r.width == null ? null : Number(r.width),
+    height: r.height == null ? null : Number(r.height),
+    bytes: Number(r.bytes),
+    createdAt: r.created_at as string,
+  };
+}
+
+export function createMedia(m: Omit<Media, "id" | "createdAt">): Media {
+  const id = randomUUID();
+  getDb()
+    .prepare(
+      `INSERT INTO media (id, store_id, kind, mime, file_name, alt, width, height, bytes)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(id, m.storeId, m.kind, m.mime, m.fileName, m.alt, m.width, m.height, m.bytes);
+  return getMedia(id)!;
+}
+
+export function getMedia(id: string): Media | null {
+  const r = getDb().prepare("SELECT * FROM media WHERE id = ?").get(id) as Row | undefined;
+  return r ? toMedia(r) : null;
+}
+
+export function listMedia(storeId: string): Media[] {
+  return (
+    getDb().prepare("SELECT * FROM media WHERE store_id = ? ORDER BY created_at, rowid").all(storeId) as Row[]
+  ).map(toMedia);
+}
+
+export function updateMediaAlt(id: string, alt: string): void {
+  getDb().prepare("UPDATE media SET alt = ? WHERE id = ?").run(alt, id);
+}
+
+export function setMediaFileName(id: string, fileName: string): void {
+  getDb().prepare("UPDATE media SET file_name = ? WHERE id = ?").run(fileName, id);
+}
+
+// ---------------------------------------------------------------- Newsletter
+
+export function subscribeNewsletter(storeId: string, email: string): void {
+  getDb()
+    .prepare("INSERT INTO newsletter (store_id, email) VALUES (?, ?) ON CONFLICT DO NOTHING")
+    .run(storeId, email.trim().toLowerCase());
+}
+
+export function listNewsletter(storeId: string): { email: string; consentedAt: string }[] {
+  return (
+    getDb().prepare("SELECT * FROM newsletter WHERE store_id = ? ORDER BY consented_at DESC").all(storeId) as Row[]
+  ).map((r) => ({ email: r.email as string, consentedAt: r.consented_at as string }));
 }

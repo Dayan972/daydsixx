@@ -7,6 +7,7 @@ export const MESSAGE_COST = 1;
 
 export const TOOL_COSTS = {
   get_store_overview: 0,
+  list_media: 0,
   check_publish_readiness: 0,
   update_store_identity: 1,
   update_theme: 1,
@@ -21,9 +22,10 @@ export type ToolName = keyof typeof TOOL_COSTS;
 
 export const TOOL_LABELS: Record<ToolName, string> = {
   get_store_overview: "Consulter la boutique",
+  list_media: "Consulter vos photos",
   check_publish_readiness: "Vérifier si la boutique est prête à publier",
   update_store_identity: "Changer le nom, le slogan ou la description",
-  update_theme: "Changer les couleurs et la police",
+  update_theme: "Changer le modèle ou la palette de couleurs",
   set_homepage_sections: "Réécrire la page d'accueil",
   add_product: "Ajouter un produit (fiche optimisée pour le référencement)",
   update_product: "Modifier un produit",

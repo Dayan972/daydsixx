@@ -36,8 +36,9 @@ async function LegalView({ params }: Pick<Props, "params">) {
   const incomplete = missingLegalFields(store.legal).length > 0;
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-12">
-      <h1 className="text-3xl">{legal.title}</h1>
+    <main className="sf-container py-16">
+      <div className="sf-narrow">
+      <h1 className="sf-display sf-h2">{legal.title}</h1>
       {incomplete && (
         <p className="mt-4 border border-amber-400 bg-amber-50 p-3 text-sm text-amber-900">
           Informations en cours de complétion par le vendeur.
@@ -45,12 +46,13 @@ async function LegalView({ params }: Pick<Props, "params">) {
       )}
       {legal.sections.map((s) => (
         <section key={s.heading} className="mt-8">
-          <h2 className="text-xl font-semibold">{s.heading}</h2>
+          <h2 className="sf-display sf-h3">{s.heading}</h2>
           {s.paragraphs.map((p, i) => (
             <p key={i} className="mt-3 leading-relaxed">{p}</p>
           ))}
         </section>
       ))}
+      </div>
     </main>
   );
 }

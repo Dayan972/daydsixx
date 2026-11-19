@@ -4,8 +4,10 @@ import {
   addLedgerEntry,
   createProduct,
   deleteProduct,
+  getMedia,
   getProduct,
   getStore,
+  listMedia,
   listCoupons,
   listProducts,
   transaction,
@@ -21,7 +23,7 @@ import { TOOL_COSTS, TOOL_LABELS, type ToolName } from "../credits";
 import { checkBrandUse, type BrandContext } from "../guardrails/brands";
 import { missingLegalFields } from "../legal";
 import { publishReadiness } from "../publish";
-import { SectionSchema, ThemeSchema, formatEuros } from "../store-types";
+import { MediaRef, SectionSchema, ThemeSchema, formatEuros } from "../store-types";
 
 // ---------------------------------------------------------------- Schémas d'entrée
 
@@ -37,13 +39,18 @@ const ProductFields = {
   priceEur: euros.describe("Prix de vente TTC en euros"),
   compareAtPriceEur: euros.optional().describe("Ancien prix barré, seulement s'il a réellement été pratiqué"),
   tags: z.array(z.string().min(1).max(30)).max(10).optional().describe("Catégories / mots-clés"),
-  imageUrl: z.url().optional().describe("URL d'une image fournie par le marchand"),
+  images: z
+    .array(MediaRef)
+    .max(8)
+    .optional()
+    .describe("Photos du produit (media:<id> de la médiathèque), la première est le visuel principal"),
   seoTitle: z.string().max(70).optional().describe("Titre pour Google, 70 caractères max"),
   seoDescription: z.string().max(160).optional().describe("Méta-description, 160 caractères max"),
 };
 
 export const TOOL_INPUTS = {
   get_store_overview: z.object({}),
+  list_media: z.object({}),
   check_publish_readiness: z.object({}),
   update_store_identity: z
     .object({
@@ -77,14 +84,16 @@ export const TOOL_INPUTS = {
 const DESCRIPTIONS: Record<ToolName, string> = {
   get_store_overview:
     "Renvoie l'état complet de la boutique (identité, thème, sections, produits, codes promo). L'état est déjà fourni au début de chaque message : n'appelez cet outil que si vous avez besoin de l'état après vos propres modifications.",
+  list_media:
+    "Liste les photos de la médiathèque du marchand (identifiant media:<id>, description, dimensions). Utilisez ces références dans les produits (images) et les sections (image, images).",
   check_publish_readiness:
     "Renvoie la liste de contrôle avant publication (points bloquants et comment les corriger). La publication elle-même est faite par le marchand.",
   update_store_identity:
     "Modifie le nom, le slogan et/ou la description de la boutique. L'identité doit être originale : aucune marque existante.",
   update_theme:
-    "Modifie l'apparence : couleurs (#RRGGBB, contraste lisible), police, ambiance. Seuls les champs fournis changent.",
+    "Choisit le modèle de mise en page et la palette de couleurs, conçus par des designers et testés pour la lisibilité. Choisissez le modèle selon le secteur et l'ambiance voulue. Seuls les champs fournis changent.",
   set_homepage_sections:
-    "Remplace l'ensemble des sections de la page d'accueil. Une grille de produits (product_grid) affiche automatiquement les produits. N'invente ni avis clients, ni chiffres de ventes, ni labels.",
+    "Remplace l'ensemble des sections de la page d'accueil. Composez une page éditoriale de 5 à 8 sections variées (par exemple hero, marquee, product_grid, split, manifesto, featured_product, faq, newsletter) ; product_grid affiche automatiquement les produits. Utilisez les photos du marchand (media:<id>) quand elles existent. Textes courts et précis. N'invente ni avis clients, ni chiffres de ventes, ni labels.",
   add_product:
     "Ajoute un produit avec une fiche rédigée et optimisée pour le référencement. N'invente aucune caractéristique (matière, origine, certification) que le marchand n'a pas indiquée.",
   update_product: "Modifie un produit existant ; seuls les champs fournis changent.",
@@ -142,6 +151,13 @@ const BRAND_CONTEXT: Partial<Record<ToolName, BrandContext>> = {
   create_coupon: "identity",
 };
 
+function collectMediaIds(value: unknown): string[] {
+  if (typeof value === "string") return value.startsWith("media:") ? [value.slice(6)] : [];
+  if (Array.isArray(value)) return value.flatMap(collectMediaIds);
+  if (value && typeof value === "object") return Object.values(value).flatMap(collectMediaIds);
+  return [];
+}
+
 const cents = (eur: number | undefined) => (eur === undefined ? undefined : Math.round(eur * 100));
 
 export function storeOverview(store: Store) {
@@ -158,7 +174,9 @@ export function storeOverview(store: Store) {
       title: p.title,
       price: formatEuros(p.priceCents),
       tags: p.tags,
+      images: p.images,
     })),
+    mediaLibraryCount: listMedia(store.id).length,
     coupons: listCoupons(store.id).map((c) => `${c.code} (-${c.percentOff} %)`),
     legalInfoComplete: missingLegalFields(store.legal).length === 0,
     authenticResellerDeclared: store.authenticResellerDeclared,
@@ -200,6 +218,10 @@ export function executeTool(
   const store = getStore(storeId);
   if (!store) return fail(name, "Boutique introuvable");
 
+  // Une image de la médiathèque doit appartenir à cette boutique.
+  const foreign = collectMediaIds(input).filter((id) => getMedia(id)?.storeId !== storeId);
+  if (foreign.length > 0) return fail(name, `Image introuvable dans la médiathèque : media:${foreign[0]}`);
+
   const brandContext = BRAND_CONTEXT[name];
   if (brandContext) {
     const verdict = checkBrandUse(input, brandContext, store.authenticResellerDeclared);
@@ -240,6 +262,17 @@ function runTool(
     case "get_store_overview":
       return { result: { store: storeOverview(store) } };
 
+    case "list_media":
+      return {
+        result: {
+          media: listMedia(store.id).map((m) => ({
+            ref: `media:${m.id}`,
+            description: m.alt,
+            format: m.width && m.height ? `${m.width}×${m.height}` : undefined,
+          })),
+        },
+      };
+
     case "check_publish_readiness":
       return { result: { checklist: publishReadiness(store, listProducts(store.id)) } };
 
@@ -265,7 +298,7 @@ function runTool(
         description: i.description,
         priceCents: cents(i.priceEur)!,
         compareAtCents: cents(i.compareAtPriceEur) ?? null,
-        imageUrl: i.imageUrl ?? null,
+        images: i.images,
         tags: i.tags,
         seoTitle: i.seoTitle,
         seoDescription: i.seoDescription,
@@ -281,7 +314,7 @@ function runTool(
         description: i.description,
         priceCents: cents(i.priceEur),
         compareAtCents: cents(i.compareAtPriceEur),
-        imageUrl: i.imageUrl,
+        images: i.images,
         tags: i.tags,
         seoTitle: i.seoTitle,
         seoDescription: i.seoDescription,

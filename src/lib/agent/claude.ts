@@ -26,7 +26,7 @@ const getClient = () => (client ??= new Anthropic());
 export async function runClaudeTurn(params: {
   storeId: string;
   history: MessageParam[];
-  userContent: string;
+  userContent: string | Anthropic.Beta.BetaContentBlockParam[];
   budget: TurnBudget;
 }): Promise<AgentTurnResult> {
   const messages: MessageParam[] = [

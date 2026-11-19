@@ -1,7 +1,8 @@
 import type { CSSProperties } from "react";
 import { notFound } from "next/navigation";
-import { getStoreBySlugOrDomain, type Store } from "@/lib/db";
-import { FONT_STACKS } from "@/lib/store-types";
+import { getMedia, getStoreBySlugOrDomain, type Store } from "@/lib/db";
+import { isMediaRef, mediaUrl } from "@/lib/media";
+import { TEMPLATES, resolvePalette } from "@/lib/store-types";
 
 /**
  * Une boutique est servie soit sous /s/<slug> (aperçu), soit sur son propre
@@ -19,37 +20,64 @@ export function loadStore(key: string): Store {
 }
 
 export function themeStyle(store: Store): CSSProperties {
+  const p = resolvePalette(store.theme);
+  const t = TEMPLATES[store.theme.template];
   return {
-    "--store-primary": store.theme.primaryColor,
-    "--store-bg": store.theme.backgroundColor,
-    "--store-fg": store.theme.textColor,
-    "--store-font": FONT_STACKS[store.theme.font],
+    "--s-bg": p.bg,
+    "--s-fg": p.fg,
+    "--s-surface": p.surface,
+    "--s-accent": p.accent,
+    "--s-on-accent": p.onAccent,
+    "--s-line": `color-mix(in srgb, ${p.fg} 14%, transparent)`,
+    "--s-display": t.display,
+    "--s-body": t.body,
+    colorScheme: p.dark ? "dark" : "light",
   } as CSSProperties;
 }
 
-/** Visuel de remplacement quand le marchand n'a pas fourni de photo. */
-export function ProductVisual({ title, imageUrl, large }: { title: string; imageUrl: string | null; large?: boolean }) {
-  if (imageUrl) {
-    // eslint-disable-next-line @next/next/no-img-element -- images externes fournies par le marchand
-    return <img src={imageUrl} alt={title} className="aspect-square w-full object-cover" />;
-  }
-  const initials = title
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase())
-    .join("");
+/** Texte alternatif : celui de la médiathèque s'il existe, sinon le libellé fourni. */
+function altFor(ref: string, fallback: string): string {
+  if (isMediaRef(ref)) return getMedia(ref.slice(6))?.alt || fallback;
+  return fallback;
+}
+
+/**
+ * Visuel d'un produit ou d'une section. Sans image, on affiche une plaque de couleur
+ * travaillée (dégradé + grain) plutôt qu'un carré vide : la page reste élégante.
+ */
+export function Visual({
+  refs,
+  label,
+  ratio = "4 / 5",
+  priority,
+  className = "",
+}: {
+  refs: (string | undefined)[];
+  label: string;
+  ratio?: string;
+  priority?: boolean;
+  className?: string;
+}) {
+  const urls = refs.map((r) => ({ ref: r, url: mediaUrl(r) })).filter((x) => x.url) as { ref: string; url: string }[];
   return (
-    <div
-      role="img"
-      aria-label={`${title} (photo à venir)`}
-      className={`flex aspect-square w-full items-center justify-center ${large ? "text-6xl" : "text-3xl"}`}
-      style={{
-        background:
-          "linear-gradient(135deg, color-mix(in srgb, var(--store-primary) 22%, var(--store-bg)), color-mix(in srgb, var(--store-primary) 55%, var(--store-bg)))",
-        color: "var(--store-bg)",
-      }}
-    >
-      {initials}
+    <div className={`sf-media ${className}`} style={{ aspectRatio: ratio }}>
+      {urls.length === 0 ? (
+        <div className="sf-plate" role="img" aria-label={`${label} (visuel à venir)`}>
+          <span>{label}</span>
+        </div>
+      ) : (
+        urls.slice(0, 2).map((u, i) => (
+          // eslint-disable-next-line @next/next/no-img-element -- médiathèque servie par nos soins
+          <img
+            key={u.ref}
+            src={u.url}
+            alt={i === 0 ? altFor(u.ref, label) : ""}
+            loading={priority && i === 0 ? "eager" : "lazy"}
+            fetchPriority={priority && i === 0 ? "high" : undefined}
+            decoding="async"
+          />
+        ))
+      )}
     </div>
   );
 }

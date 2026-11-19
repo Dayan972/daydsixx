@@ -16,7 +16,7 @@ export async function GET(request: NextRequest, ctx: RouteContext<"/api/stores/[
   const date = new Date().toISOString().slice(0, 10);
 
   if (format === "shopify-csv") {
-    return new Response(buildShopifyCsv(store, products), {
+    return new Response(buildShopifyCsv(store, products, request.nextUrl.origin), {
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
         "Content-Disposition": `attachment; filename="${store.slug}-produits-${date}.csv"`,

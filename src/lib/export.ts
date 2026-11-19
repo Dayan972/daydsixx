@@ -83,12 +83,19 @@ export function descriptionToHtml(text: string): string {
     .join("");
 }
 
+function imageUrl(ref: string | undefined, origin: string): string {
+  if (!ref) return "";
+  return ref.startsWith("media:") ? `${origin}/media/${ref.slice(6)}` : ref;
+}
+
 const euros = (cents: number | null) => (cents == null ? "" : (cents / 100).toFixed(2));
 
-export function buildShopifyCsv(store: Store, products: Product[]): string {
+/** `origin` sert à rendre absolues les URL des images de la médiathèque (Shopify les télécharge). */
+export function buildShopifyCsv(store: Store, products: Product[], origin = ""): string {
   const published = store.status === "published";
-  const rows = products.map((p) =>
-    [
+  const rows = products.map((p) => {
+    const image = imageUrl(p.images[0], origin);
+    return [
       p.handle,
       p.title,
       descriptionToHtml(p.description),
@@ -102,15 +109,15 @@ export function buildShopifyCsv(store: Store, products: Product[]): string {
       euros(p.compareAtCents),
       "TRUE",
       "TRUE",
-      p.imageUrl ?? "",
-      p.imageUrl ? 1 : "",
-      p.imageUrl ? p.title : "",
+      image,
+      image ? 1 : "",
+      image ? p.title : "",
       p.seoTitle,
       p.seoDescription,
       published ? "active" : "draft",
     ]
       .map(csvCell)
-      .join(","),
-  );
+      .join(",");
+  });
   return [SHOPIFY_COLUMNS.join(","), ...rows].join("\r\n") + "\r\n";
 }

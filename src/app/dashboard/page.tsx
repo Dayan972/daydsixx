@@ -9,6 +9,8 @@ import {
   listChatLog,
   listCoupons,
   listLedger,
+  listMedia,
+  listNewsletter,
   listOrders,
   listProducts,
   pageviewsLastDays,
@@ -27,13 +29,16 @@ import {
   updateDomain,
   updateMessageCap,
 } from "./actions";
-import { ChatPanel, StatefulForm } from "./components";
+import { ChatPanel, PhotoUploader, StatefulForm } from "./components";
+import { mediaUrl } from "@/lib/media";
+import { PALETTES, TEMPLATES } from "@/lib/store-types";
 
 export const metadata: Metadata = { title: "Mon espace", robots: { index: false } };
 
 const TABS = [
   { id: "apercu", label: "Aperçu" },
   { id: "produits", label: "Produits" },
+  { id: "photos", label: "Photos" },
   { id: "commandes", label: "Commandes" },
   { id: "credits", label: "Crédits" },
   { id: "legal", label: "Légal" },
@@ -137,6 +142,7 @@ async function Dashboard({ searchParams }: Pick<PageProps<"/dashboard">, "search
           <div className="py-6">
             {tab === "apercu" && <Overview store={store} readiness={readiness} />}
             {tab === "produits" && <Products store={store} />}
+            {tab === "photos" && <Photos store={store} />}
             {tab === "commandes" && <Orders store={store} />}
             {tab === "credits" && <Credits store={store} />}
             {tab === "legal" && <Legal store={store} />}
@@ -163,11 +169,16 @@ function Overview({ store, readiness }: { store: Store; readiness: ReturnType<ty
   const revenue = orders.reduce((s, o) => s + o.totalCents, 0);
   return (
     <div className="space-y-8">
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label="Visites (7 jours)" value={String(pageviewsLastDays(store.id))} hint="Mesurées sans cookie" />
         <Stat label="Commandes" value={String(orders.length)} hint="Paiement en mode test" />
         <Stat label="Chiffre d'affaires" value={formatEuros(revenue)} />
+        <Stat label="Inscrits newsletter" value={String(listNewsletter(store.id).length)} hint="Consentement enregistré" />
       </div>
+      <p className="text-sm text-muted">
+        Apparence : modèle <strong className="text-foreground">{TEMPLATES[store.theme.template].label}</strong>, palette{" "}
+        <strong className="text-foreground">{PALETTES[store.theme.palette].label}</strong>. Demandez à l&apos;assistant d&apos;en changer.
+      </p>
       <div>
         <h2 className="text-lg font-semibold">Avant de publier</h2>
         <p className="text-sm text-muted">La boutique ne peut être mise en ligne que lorsque tous les points sont validés.</p>
@@ -208,10 +219,20 @@ function Products({ store }: { store: Store }) {
             {products.map((p) => (
               <tr key={p.id} className="border-t border-border align-top">
                 <td className="px-3 py-2">
+                  <div className="flex gap-3">
+                  {mediaUrl(p.images[0]) ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- médiathèque
+                    <img src={mediaUrl(p.images[0])!} alt="" className="h-12 w-12 shrink-0 rounded object-cover" />
+                  ) : (
+                    <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded bg-surface text-[10px] text-muted">sans photo</span>
+                  )}
+                  <div>
                   <Link href={`/s/${store.slug}/produits/${p.handle}`} target="_blank" className="font-medium underline">
                     {p.title}
                   </Link>
                   <p className="mt-1 line-clamp-2 text-xs text-muted">{p.description}</p>
+                  </div>
+                  </div>
                 </td>
                 <td className="px-3 py-2 whitespace-nowrap">{formatEuros(p.priceCents)}</td>
                 <td className="px-3 py-2 text-xs text-muted">{p.tags.join(", ")}</td>
@@ -224,6 +245,33 @@ function Products({ store }: { store: Store }) {
         <p className="text-sm">
           Codes promo : {coupons.map((c) => `${c.code} (−${c.percentOff} %)`).join(", ")}
         </p>
+      )}
+    </div>
+  );
+}
+
+function Photos({ store }: { store: Store }) {
+  const media = listMedia(store.id);
+  return (
+    <div className="space-y-6">
+      <p className="text-sm text-muted">
+        Vos photos sont le premier facteur de qualité de votre boutique. Envoyez-les ici ou directement dans la
+        conversation : l&apos;assistant les voit, les décrit fidèlement et les place là où elles rendent le mieux.
+      </p>
+      <PhotoUploader />
+      {media.length > 0 && (
+        <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+          {media.map((m) => (
+            <li key={m.id} className="overflow-hidden rounded-lg border border-border">
+              {/* eslint-disable-next-line @next/next/no-img-element -- médiathèque */}
+              <img src={`/media/${m.id}`} alt={m.alt} className="aspect-square w-full object-cover" />
+              <p className="truncate px-2 py-1 text-xs text-muted" title={m.alt}>
+                {m.alt || "Sans description"}
+                {m.width && m.height ? ` · ${m.width}×${m.height}` : ""}
+              </p>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

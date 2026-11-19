@@ -2,7 +2,10 @@ import { z } from "zod";
 import { getOrCreateDemoStore } from "@/lib/db";
 import { runAgentTurn } from "@/lib/agent/run";
 
-const Body = z.object({ message: z.string().trim().min(1).max(4000) });
+const Body = z.object({
+  message: z.string().trim().min(1).max(4000),
+  attachments: z.array(z.string().regex(/^media:[0-9a-f-]{36}$/)).max(10).optional(),
+});
 
 export async function POST(request: Request) {
   const parsed = Body.safeParse(await request.json().catch(() => null));
@@ -11,6 +14,6 @@ export async function POST(request: Request) {
   }
   // Prototype mono-marchand : à remplacer par la boutique de l'utilisateur connecté.
   const store = getOrCreateDemoStore();
-  const result = await runAgentTurn(store.id, parsed.data.message);
+  const result = await runAgentTurn(store.id, parsed.data.message, parsed.data.attachments ?? []);
   return Response.json(result, { status: result.ok ? 200 : 502 });
 }

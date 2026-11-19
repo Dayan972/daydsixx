@@ -44,7 +44,24 @@ interface ChatMessage {
   role: "user" | "assistant";
   text: string;
   actions: ChatAction[];
+  attachments?: string[];
   creditsSpent: number;
+}
+
+const refUrl = (ref: string) => `/media/${ref.replace(/^media:/, "")}`;
+
+/** Envoie des photos à la médiathèque ; renvoie les références créées et les erreurs. */
+export async function uploadPhotos(files: FileList | File[]): Promise<{ refs: string[]; errors: string[] }> {
+  const form = new FormData();
+  for (const f of Array.from(files)) form.append("files", f);
+  const res = await fetch("/api/media", { method: "POST", body: form });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return { refs: [], errors: [data.error ?? "Envoi impossible."] };
+  const results = (data.results ?? []) as { ok: boolean; ref?: string; name: string; error?: string }[];
+  return {
+    refs: results.filter((r) => r.ok && r.ref).map((r) => r.ref!),
+    errors: results.filter((r) => !r.ok).map((r) => `${r.name} : ${r.error}`),
+  };
 }
 
 const SUGGESTIONS = [
@@ -70,7 +87,22 @@ export function ChatPanel({
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const [credits, setCredits] = useState(balance);
+  const [attachments, setAttachments] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function attach(files: FileList | null) {
+    if (!files?.length) return;
+    setUploading(true);
+    setUploadError("");
+    const { refs, errors } = await uploadPhotos(files);
+    setAttachments((a) => [...a, ...refs].slice(0, 10));
+    if (errors.length) setUploadError(errors.join(" · "));
+    setUploading(false);
+    if (fileRef.current) fileRef.current.value = "";
+  }
 
   // L'état local fait foi après le montage ; le parent change la `key` pour repartir à zéro.
   useEffect(() => {
@@ -84,14 +116,16 @@ export function ChatPanel({
   async function send(text: string) {
     const message = text.trim();
     if (!message || pending) return;
+    const sent = attachments;
     setInput("");
+    setAttachments([]);
     setPending(true);
-    setMessages((m) => [...m, { role: "user", text: message, actions: [], creditsSpent: 0 }]);
+    setMessages((m) => [...m, { role: "user", text: message, actions: [], attachments: sent, creditsSpent: 0 }]);
     try {
       const res = await fetch("/api/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message, attachments: sent }),
       });
       const data = await res.json();
       setMessages((m) => [
@@ -156,6 +190,14 @@ export function ChatPanel({
                   : "max-w-[95%] space-y-2 text-sm"
               }
             >
+              {m.attachments && m.attachments.length > 0 && (
+                <div className="mb-2 flex flex-wrap gap-1">
+                  {m.attachments.map((ref) => (
+                    // eslint-disable-next-line @next/next/no-img-element -- médiathèque
+                    <img key={ref} src={refUrl(ref)} alt="" className="h-14 w-14 rounded object-cover" />
+                  ))}
+                </div>
+              )}
               <p className="whitespace-pre-wrap">{m.text}</p>
               {m.actions.length > 0 && (
                 <ul className="space-y-1">
@@ -192,6 +234,26 @@ export function ChatPanel({
           send(input);
         }}
       >
+        {(attachments.length > 0 || uploading || uploadError) && (
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            {attachments.map((ref) => (
+              <span key={ref} className="relative">
+                {/* eslint-disable-next-line @next/next/no-img-element -- médiathèque */}
+                <img src={refUrl(ref)} alt="Photo jointe" className="h-12 w-12 rounded object-cover" />
+                <button
+                  type="button"
+                  aria-label="Retirer cette photo"
+                  onClick={() => setAttachments((a) => a.filter((x) => x !== ref))}
+                  className="absolute -right-1 -top-1 h-5 w-5 rounded-full bg-foreground text-[10px] text-background"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            {uploading && <span className="text-xs text-muted">Envoi des photos…</span>}
+            {uploadError && <span className="text-xs text-amber-700 dark:text-amber-400">{uploadError}</span>}
+          </div>
+        )}
         <label htmlFor="chat-input" className="sr-only">Votre message</label>
         <textarea
           id="chat-input"
@@ -214,15 +276,67 @@ export function ChatPanel({
               ? "Solde épuisé : rien ne sera débité."
               : `Coût maximum de ce message : ${maxCost} crédit(s), selon les actions réalisées.`}
           </p>
+          <div className="flex items-center gap-2">
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            multiple
+            className="sr-only"
+            id="chat-photos"
+            onChange={(e) => attach(e.target.files)}
+          />
+          <label
+            htmlFor="chat-photos"
+            title="Joindre des photos (JPEG, PNG ou WebP, 5 Mo max.)"
+            className="cursor-pointer rounded-md border border-border px-3 py-2 text-sm hover:bg-surface"
+          >
+            📎 Photos
+          </label>
           <button
             type="submit"
-            disabled={pending || !input.trim() || credits < 1}
+            disabled={pending || uploading || !input.trim() || credits < 1}
             className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground disabled:opacity-50"
           >
             Envoyer
           </button>
+          </div>
         </div>
       </form>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- Médiathèque
+
+export function PhotoUploader() {
+  const router = useRouter();
+  const [state, setState] = useState<{ busy: boolean; message: string }>({ busy: false, message: "" });
+  return (
+    <div className="rounded-lg border border-dashed border-border p-6 text-center">
+      <input
+        id="library-upload"
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        multiple
+        className="sr-only"
+        onChange={async (e) => {
+          if (!e.target.files?.length) return;
+          setState({ busy: true, message: "" });
+          const { refs, errors } = await uploadPhotos(e.target.files);
+          setState({
+            busy: false,
+            message: [refs.length ? `${refs.length} photo(s) ajoutée(s).` : "", ...errors].filter(Boolean).join(" "),
+          });
+          e.target.value = "";
+          router.refresh();
+        }}
+      />
+      <label htmlFor="library-upload" className="inline-block cursor-pointer rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground">
+        {state.busy ? "Envoi…" : "Ajouter des photos"}
+      </label>
+      <p className="mt-2 text-xs text-muted">JPEG, PNG ou WebP, 5 Mo maximum par photo, 10 à la fois.</p>
+      {state.message && <p role="status" className="mt-2 text-sm">{state.message}</p>}
     </div>
   );
 }
