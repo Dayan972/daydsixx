@@ -511,3 +511,8 @@
     transition: none;
   }
 }
+
+/* Sur une photo, le texte se place en bas pour ne pas masquer le produit. */
+.sf[data-template="maison"] .sf-hero--image {
+  align-items: flex-end;
+}
