@@ -1,0 +1,83 @@
+@import "tailwindcss";
+
+/* Polices système : aucun appel à Google Fonts, donc aucun transfert d'IP hors UE. */
+:root {
+  --background: #ffffff;
+  --foreground: #0f172a;
+  --muted: #64748b;
+  --border: #e2e8f0;
+  --surface: #f8fafc;
+  --accent: #4f46e5;
+  --accent-foreground: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --background: #0b1020;
+    --foreground: #e2e8f0;
+    --muted: #94a3b8;
+    --border: #1e293b;
+    --surface: #111827;
+    --accent: #818cf8;
+    --accent-foreground: #0b1020;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-surface: var(--surface);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+/* Boutiques des marchands : le thème est injecté en variables CSS. */
+.storefront {
+  background: var(--store-bg);
+  color: var(--store-fg);
+  font-family: var(--store-font);
+}
+.storefront .store-btn {
+  background: var(--store-primary);
+  color: var(--store-bg);
+}
+.storefront .store-link {
+  color: var(--store-primary);
+}
+.storefront .store-muted {
+  opacity: 0.7;
+}
+.storefront .store-border {
+  border-color: color-mix(in srgb, var(--store-fg) 15%, transparent);
+}
+.storefront .store-surface {
+  background: color-mix(in srgb, var(--store-fg) 4%, var(--store-bg));
+}
+.storefront[data-style="luxe"] h1,
+.storefront[data-style="luxe"] h2 {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 400;
+}
+.storefront[data-style="audacieux"] h1,
+.storefront[data-style="audacieux"] h2 {
+  font-weight: 900;
+  letter-spacing: -0.02em;
+}
+.storefront[data-style="chaleureux"] .store-btn,
+.storefront[data-style="chaleureux"] .store-card {
+  border-radius: 1rem;
+}
+.storefront[data-style="minimal"] .store-btn,
+.storefront[data-style="luxe"] .store-btn {
+  border-radius: 0;
+}
